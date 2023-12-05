@@ -63,9 +63,12 @@ class IFSCScraper():
 
         self.load_page(url)
 
-        comp_list = self.browser.find_elements_by_xpath("//select[@class='compChooser']")
+        #old version
+        #comp_list = self.browser.find_elements_by_xpath("//select[@class='compChooser']")
 
-
+        comp_list = self.browser.find_element(By.ID, "years")
+        print(comp_list)
+        
         # List of comp names
         comp_list = [x.find_elements_by_tag_name('option') for x in comp_list]
         comp_list = comp_list[0]
