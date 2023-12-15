@@ -6,6 +6,8 @@ from selenium.common.exceptions import TimeoutException
 import pandas as pd
 import numpy as np
 import time
+import datetime
+
 
 class IFSCScraper():
     """
@@ -26,6 +28,10 @@ class IFSCScraper():
         # Add incognito arg to webdriver
         option = webdriver.ChromeOptions()
         option.add_argument(" — incognito")
+
+        #prevent chrome push notifications which interrupt scraper
+        prefs = {"profile.default_content_setting_values.notifications" : 2}
+        option.add_experimental_option("prefs",prefs)
 
         # Create new instance of Chrome
         self.browser = webdriver.Chrome(options=option)
@@ -49,13 +55,13 @@ class IFSCScraper():
         self.load_page(url)
 
 
-    def get_comp_links(self):
+    def get_comp_data(self):
         """
-        Parse the world-competition/last-result page to find and return comp names, dates, and links
+        Parse the world-competition/last-result page to find and return a list of comps and their data
         input:
             N/A
         output:
-            List of touples containing comp names, dates, and url strings for each competition result page
+            List of touples containing comp names, dates, and lists for each data type (lead, speed, boulder, combined)
         """
 
         # Page url
@@ -63,140 +69,99 @@ class IFSCScraper():
 
         self.load_page(url)
 
-        #old version
-        #comp_list = self.browser.find_elements_by_xpath("//select[@class='compChooser']")
+        # Store iframe web element
+        iframe = self.browser.find_element(By.TAG_NAME, "iframe")
+        # switch to selected iframe
+        self.browser.switch_to.frame(iframe)
 
-        comp_list = self.browser.find_element(By.ID, "years")
-        print(comp_list)
-        
-        # List of comp names
-        comp_list = [x.find_elements_by_tag_name('option') for x in comp_list]
-        comp_list = comp_list[0]
-        comp_names = [x.text for x in comp_list]
-        
-        # List of comp dates
-        comp_dates = [x.get_attribute('title') for x in comp_list]
+        #store selector elements
+        yearsSelector = self.browser.find_element(By.ID, "years")
+        leagueSelector = self.browser.find_element(By.ID, "indexes")
+        compSelector = self.browser.find_element(By.ID, "events")
+        catSelector = self.browser.find_element(By.ID, "categories")
 
-        # List of links to comps
-        comp_links = [x.get_attribute('value') for x in comp_list]
-        comp_links = [url + '#!comp=' + x for x in comp_links]
-        
+        yearOptions = yearsSelector.find_elements(By.TAG_NAME, "option")
+        comps = []
 
-        return [(name, date, link) for name, date, link in zip(comp_names, comp_dates, comp_links)]
+        for year in yearOptions:
+            today = datetime.date.today()
+            currentYear = today.year
+            if year.text == str(currentYear+1):
+                continue
 
-    def get_complete_result_links(self, comp_info):
-        """
-        Given the list of competitions, get links to the complete results for each subcategory in the comp
-        input:
-            comp_info: List of touples of comp names, dates, and links to page for comp results
-        output:
-            List of tuples giving comp name, date, subcategory name, and url to full results
-            for that subcategory
-        """
+            if year.text == "2019":
+                break
 
-        if self.debug:
-            limit = 3
-            curr = 0
+            year.click()
+            time.sleep(3)
+            leagues = []
+            leagueOptions = leagueSelector.find_elements(By.TAG_NAME, "option")
 
-        # Hold new comp info
-        new_info = []
+            for league in leagueOptions:
+                if league.text == "Select league":
+                    continue
 
-        # Iterate through comps and visit each link
-        for comp in comp_info:
-            # Extract link
-            comp_link = comp[-1]
-            
-            self.load_page(comp_link)
+                leagues.append(league.text)
+                league.click()
+                time.sleep(2)
 
-            # List of subcategories of competitions
-            cat_list = self.browser.find_elements_by_xpath("//th[@colspan='4']")
-            temp = [x.find_elements_by_tag_name('a') for x in cat_list]
-            cat_list = [x.text for x in cat_list]
-
-            # List of links to subcategories
-            cat_links = [x[0].get_attribute('href') for x in temp]
-
-            # Package info as tuples
-            new_tuple = [((name, link),) for name, link in zip(cat_list, cat_links)]
-
-            # Add tuples to current info
-            for tup in new_tuple:
-                comp += tup
-
-            new_info.append(comp)
-
-            if self.debug:
-                curr += 1
-                if curr > limit:
+                #conditional because I don't have time to so anything other than world cup
+                if "IFSC" in league.text:
                     break
 
-        return new_info
-    
-
-    def get_sub_comp_info(self, comp_info):
-        """
-        Given links to all sub-category competitions, visit these links and gather info about subcompetitions
-        Input:
-            comp_info: List of tuples containing info about competitions and sub-categories
-        Output:
-            List of tuples containing info about each comp
-        """
-
-        if self.debug:
-            lim = 3
-            cnt = 0
-
-        # Hold new comp info
-        lead_data = []
-        speed_data = []
-        boulder_data = []
-        combined_data = []
-
-        # Iterate through comps
-        for comp in comp_info:
-            # Preserve info about this comp
-            this_comp_info = [('Competition Title', comp[0]), ('Competition Date', comp[1])]
-            # Iterate through subcategories
-            for subcat in comp[3:]:
-                # Subcategory type
-                cat_type = subcat[0][:-16]
-
-                # Open link
-                link = subcat[1]
-
-                # Load subcategory
-                self.load_page(link)
-
-                # Lead
-                if cat_type[-4:] == 'lead':
-                    this_comp_info.append(('Category', cat_type[-4:]))
-                    this_lead_data = self.get_data_on_page(this_comp_info)
-                    lead_data.append(this_lead_data)
-                # Speed
-                elif cat_type[-5:] == 'speed':
-                    this_comp_info.append(('Category', cat_type[-5:]))
-                    this_speed_data = self.get_data_on_page(this_comp_info)
-                    speed_data.append(this_speed_data)
-                # Bouldering
-                elif cat_type[-7:] == 'boulder' or cat_type[-10:] == 'bouldering':
-                    this_comp_info.append(('Category', cat_type[-7:]))
-                    this_boulder_data = self.get_data_on_page(this_comp_info)
-                    boulder_data.append(this_boulder_data)
-                # Combined
-                elif cat_type[-8:] == 'combined':
-                    this_comp_info.append(('Category', cat_type[-8:]))
-                    this_combined_data = self.get_data_on_page(this_comp_info)
-                    combined_data.append(this_combined_data)
-                else:
-                    # Find out what category this actually was so we can find edge cases
-                    print(cat_type)
-
-                if self.debug:
-                    cnt += 1
-                    if cnt > lim:
-                        break
                 
-        return [lead_data, speed_data, boulder_data, combined_data]
+                compOptions = compSelector.find_elements(By.TAG_NAME, "option")
+
+                for comp in compOptions:   
+                    if comp.text == "Select event":
+                        continue
+                    if "CANCELLED" in comp.text:
+                        continue
+
+                    comp.click()
+                    time.sleep(3)
+
+                    name = self.browser.find_element(By.CLASS_NAME, "event_title").text
+                    date = self.browser.find_element(By.CLASS_NAME, "event_date").text
+                    lead_data = []
+                    speed_data = []
+                    boulder_data = []
+                    combined_data = []
+                  
+                    catOptions = catSelector.find_elements(By.TAG_NAME, "option")
+
+                    for cat in catOptions:
+                        if cat.text == "Select category":
+                            continue
+
+                        #since we just want boulder data for now, adding this conditional
+                        if "BOULDER" not in cat.text:
+                            continue
+
+
+                        prior_info = (name, date, cat.text)
+                        if "&" in cat.text:
+                            cat.click()                            
+                            combined_data.append(self.get_data_on_page(prior_info))
+                            
+                        elif "SPEED" in cat.text:
+                            cat.click()                            
+                            speed_data.append(self.get_data_on_page(prior_info))
+                            
+                        elif "BOULDER" in cat.text:
+                            cat.click()                            
+                            boulder_data.append(self.get_data_on_page(prior_info))
+                            
+                        elif "LEAD" in cat.text:
+                            cat.click()                            
+                            lead_data.append(self.get_data_on_page(prior_info))
+                            
+
+                    comps.append(boulder_data)
+                    #comps.append([lead_data, speed_data, boulder_data, combined_data])
+                        
+        return comps
+    
 
     def make_df_from_data(self, comp_data):
         """
@@ -206,27 +171,24 @@ class IFSCScraper():
         output:
             List of dataframes containing data
         """
-        lead_data, speed_data, boulder_data, combined_data = comp_data
-
-        # # Build lead data df
-        # lead_headers = []
-        # # Find headers
-        # for head in lead_data[0][0]:
-        #     lead_headers.append(head[0])
+        #lead_data, speed_data, boulder_data, combined_data = comp_data[0]
+        boulder_data = comp_data
 
         # Create lead df
-        lead_df = self.build_df(lead_data)
+        #lead_df = self.build_df(lead_data)
 
         # Create speed df
-        speed_df = self.build_df(speed_data)
+        #speed_df = self.build_df(speed_data)
 
         # Create boulder df
         boulder_df = self.build_df(boulder_data)
 
         # Create combined df
-        combined_df = self.build_df(combined_data)
+        #combined_df = self.build_df(combined_data)
 
-        return [lead_df, speed_df, boulder_df, combined_df]
+        #just boulder for now
+        #return [lead_df, speed_df, boulder_df, combined_df]
+        return [boulder_df]
 
     def build_df(self, cat_data):
         """
@@ -238,10 +200,14 @@ class IFSCScraper():
         """
         # Iterate through competitions, build list of dicts for df
         data_list = []
+        print (cat_data)
+
+
         for comp in cat_data:
             # Iterate through results per comp
             for result in comp:
                 # Convert to dict
+                print(result)
                 this_dict = dict(result)
                 data_list.append(this_dict)
         
@@ -260,18 +226,25 @@ class IFSCScraper():
             touple representing the table of results on the page
         """
 
+        #bonus sleep because ifsc webservers suck ass I guess
+        WebDriverWait(self.browser, 20).until(EC.visibility_of_element_located((By.ID, "table_id")))
+        
         # Get table from webpage
-        result_list = self.browser.find_elements_by_tag_name('tr')
+        resultTable = self.browser.find_element(By.ID, "table_id")
         
         # Get headers
-        result_headers = [x.find_elements_by_tag_name('th') for x in result_list]
-        headers = [x.text for x in result_headers[0]]
+        result_headers = resultTable.find_elements(By.TAG_NAME, 'th')
+        headers = [x.text for x in result_headers]
+        
+        print("\n\n" +str(prior_info))
         # Fix name
-        headers[1] = 'LAST'
-        headers.insert(2, 'FIRST')
+        headers[1] = 'FIRST'
+        headers[2] = 'LAST'
+        print(str(headers))
         
         # Get table rows
-        rows = [x.find_elements_by_tag_name('td') for x in result_list]
+        rows = resultTable.find_elements(By.TAG_NAME, 'tr')
+        #skip the header row
         rows = rows[1:]
 
         # Package data to be returned
@@ -279,9 +252,12 @@ class IFSCScraper():
 
         # Split rows into tuples and add to list
         for row in rows:
-            add_this = [x for x in prior_info] + [(header, x.text) for header, x in zip(headers, row)]
+            rowElements = row.find_elements(By.TAG_NAME, 'td')
+            rowContent = [x.text for x in rowElements]
+            add_this = [("Competition Title", prior_info[0]), ("Competition Date", prior_info[1]), ("Category", prior_info[2])] + [(header, x) for header, x in zip(headers, rowContent)]
             ret_data.append(add_this)
 
+        print(ret_data)
         return ret_data
 
     def load_page(self, link, timeout=20, wait_after=10):
@@ -308,41 +284,6 @@ class IFSCScraper():
 
         # Wait for page to load
         time.sleep(wait_after)
-
-    def check_for_new(self, comp_info):
-        """
-        After retrieving info about individual competitions, load previous data and compare to see
-        if there are any new comps
-        input:
-            comp_info - tuple of info about comps scraped from the results page
-        output:
-            list of info in tuple form about comps that are new and should be scraped
-        """
-
-        try:
-            # Load unique names of already scraped competitions
-            unique_names = pd.read_csv('~/projects/ifsc-scraper/data/name_df.csv')
-            # Convert to list
-            unique_names = list(unique_names['Competition Title'])
-        except:
-            print('No comp names saved')
-            unique_names = []
-
-        # List of new competition info
-        new_comp_info = []
-
-        # Check if each comp is new
-        for comp in comp_info:
-            # Check if comp has been scraped or not
-            if comp[0] in unique_names:
-                # Don't add it to new info
-                pass
-            else:
-                # New comp, add to be scraped
-                new_comp_info.append(comp)
-            
-        # Return list of new comps
-        return new_comp_info
 
     def merge_dfs(self, gathered_dfs):
         """
@@ -544,21 +485,24 @@ class IFSCScraper():
         output:
             N/A
         """
-        lead_df, speed_df, boulder_df, combined_df = self.make_df_from_data(self.get_sub_comp_info(self.get_complete_result_links(self.check_for_new(self.get_comp_links()))))
+
+        #just boulder for now
+        #lead_df, speed_df, boulder_df, combined_df = self.make_df_from_data(self.get_comp_data())
+        boulder_df = self.make_df_from_data(self.get_comp_data())
 
         # Merge new data with old data
-        lead_df, speed_df, boulder_df, combined_df = self.merge_dfs([lead_df, speed_df, boulder_df, combined_df])
+        #lead_df, speed_df, boulder_df, combined_df = self.merge_dfs([lead_df, speed_df, boulder_df, combined_df])
 
         # Clean data before saving
-        lead_df = self.clean_lead(lead_df)
-        speed_df = self.clean_speed(speed_df)
-        boulder_df = self.clean_boulder(boulder_df)
-        combined_df = self.clean_combined(combined_df)
+        #lead_df = self.clean_lead(lead_df)
+        #speed_df = self.clean_speed(speed_df)
+        #boulder_df = self.clean_boulder(boulder_df)
+        #combined_df = self.clean_combined(combined_df)
 
-        lead_df.to_csv('lead_results.csv', index=False)
-        speed_df.to_csv('speed_results.csv', index=False)
+        #lead_df.to_csv('lead_results.csv', index=False)
+        #speed_df.to_csv('speed_results.csv', index=False)
         boulder_df.to_csv('boulder_results.csv', index=False)
-        combined_df.to_csv('combined_results.csv', index=False)
+        #combined_df.to_csv('combined_results.csv', index=False)
 
 
 def main():
